@@ -1781,6 +1781,14 @@ def create_upload_app(upload_state: UploadState) -> Flask:
             return "Session not active. Re-scan a fresh QR from laptop.", 404
         return (_build_mobile_upload_page(session_id), 200)
 
+    @app.get("/session/current")
+    def current_session_page() -> tuple[str, int]:
+        with upload_state.lock:
+            active_session_id = upload_state.active_session_id
+        if not active_session_id:
+            return "No active recovery session yet. Start one on laptop first.", 404
+        return (_build_mobile_upload_page(active_session_id), 200)
+
     @app.get("/session/<session_id>/status")
     def session_status(session_id: str):
         with upload_state.lock:
@@ -1824,6 +1832,15 @@ def create_upload_app(upload_state: UploadState) -> Flask:
             "Upload received. Return to laptop app for grass+outside verification verdict.",
             200,
         )
+
+    @app.post("/session/current/upload")
+    def current_upload():
+        with upload_state.lock:
+            active_session_id = upload_state.active_session_id
+        if not active_session_id:
+            return "No active recovery session. Start one on laptop first.", 400
+        # Reuse the same upload logic by binding to active session id.
+        return upload(active_session_id)
 
     return app
 
@@ -2059,7 +2076,7 @@ def _display_chain_badge(raw_badge: str) -> str:
         return "CHAIN_LIVE"
     if raw_badge == ChainBadge.CHAIN_RETRYING.value:
         return "CHAIN_RETRYING"
-    return "CHAIN_SIMULATED_IMMUTABLE"
+    return "LOCAL_LEDGER"
 
 
 def _run_chain_smoke_test(
@@ -2168,8 +2185,9 @@ def main() -> None:
     upload_state = UploadState()
     local_ip = args.upload_host_ip.strip() or get_local_ip()
     upload_root_url = f"http://{local_ip}:{args.upload_port}/"
+    fixed_session_url = f"http://{local_ip}:{args.upload_port}/session/current"
     os.makedirs(os.path.dirname(args.overlay_qr_file), exist_ok=True)
-    qr_tile = make_qr_tile(upload_root_url, size_px=240)
+    qr_tile = make_qr_tile(fixed_session_url, size_px=240)
     cv2.imwrite(args.overlay_qr_file, qr_tile)
     start_upload_server(upload_state, host="0.0.0.0", port=args.upload_port)
     print(f"[TouchGrass] Upload URL: {upload_root_url}")
@@ -2274,9 +2292,7 @@ def main() -> None:
         )
         with upload_state.lock:
             upload_state.active_session_id = session_id
-        session_url = f"http://{local_ip}:{args.upload_port}/session/{session_id}"
-        qr_tile = make_qr_tile(session_url, size_px=240)
-        cv2.imwrite(args.overlay_qr_file, qr_tile)
+        # Keep QR static for entire run: always points to /session/current.
         set_state(RecoveryAppState.OUTSIDE_MODE)
         prompt_visible = False
         absent_started_at = None
@@ -2334,8 +2350,7 @@ def main() -> None:
                         upload_state.active_session_id = ""
                     current_session = None
                     set_state(RecoveryAppState.ONLINE)
-                    qr_tile = make_qr_tile(upload_root_url, size_px=240)
-                    cv2.imwrite(args.overlay_qr_file, qr_tile)
+                    # Keep QR static for all sessions.
                     status_message = "Session timed out. Recovery reset."
                     status_message_until = now + 5.0
                 else:
@@ -2460,8 +2475,7 @@ def main() -> None:
                         with upload_state.lock:
                             upload_state.active_session_id = ""
                         current_session = None
-                        qr_tile = make_qr_tile(upload_root_url, size_px=240)
-                        cv2.imwrite(args.overlay_qr_file, qr_tile)
+                        # Keep QR static for all sessions.
                         if chain_result.proof_url:
                             status_message = (
                                 f"Proof verified. Local mint + IPFS proof ready. Value=${live_metrics.score_value:.2f}"
