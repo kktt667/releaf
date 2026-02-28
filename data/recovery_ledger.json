@@ -2,36 +2,50 @@
   "last_chain_result": {
     "badge": "CHAIN_FALLBACK_LOCAL_LEDGER",
     "error": "",
-    "local_block_hash": "c196c98b9801ff0882753f7a1100e406e0cd897d1d3dd0136bdaabf513d25805",
+    "local_block_hash": "05826e90316143a5b2bd1b3cec0ca4d8b273425379598c8fb2489dfebb64a822",
     "metadata_path": "",
     "proof_url": "",
     "token_id": "",
-    "tx_hash": "0xc196c98b9801ff0882753f7a1100e406e0cd897d1d3dd0136bdaabf513d25805"
+    "tx_hash": "0x05826e90316143a5b2bd1b3cec0ca4d8b273425379598c8fb2489dfebb64a822"
   },
   "metrics": {
-    "decay_penalties": 2,
+    "decay_penalties": 3,
     "last_outdoor_day": "2026-02-28",
-    "latest_tx_hash": "0xc196c98b9801ff0882753f7a1100e406e0cd897d1d3dd0136bdaabf513d25805",
+    "latest_tx_hash": "0x05826e90316143a5b2bd1b3cec0ca4d8b273425379598c8fb2489dfebb64a822",
     "nft_owner": "demo_wallet",
     "outdoor_sessions": 1,
-    "score_value": 1.9,
+    "score_value": 1.6,
     "streak_days": 1,
     "token_id": ""
   },
   "sessions": [
     {
-      "completed_at": 1772299197.457418,
-      "grass_outside_score": 0.36319469873885996,
-      "local_block_hash": "c196c98b9801ff0882753f7a1100e406e0cd897d1d3dd0136bdaabf513d25805",
+      "completed_at": 1772299721.300401,
+      "grass_outside_score": 0.3864146786330953,
+      "local_block_hash": "40cc2c7199cd639a3b38e340f30c2a52098afbafd1f40f46a90f0e5499d67c07",
       "metadata_path": "",
-      "outdoor_score": 0.7295996881049983,
+      "outdoor_score": 0.6472562781794184,
       "proof_status": "verified",
       "proof_url": "",
-      "session_id": "84381d24ec9d",
-      "started_at": 1772299152.966639,
+      "session_id": "89daa506c5a6",
+      "started_at": 1772299695.220393,
       "token_id": "",
-      "tx_hash": "0xc196c98b9801ff0882753f7a1100e406e0cd897d1d3dd0136bdaabf513d25805",
-      "vegetation_score": 0.49779996436428275
+      "tx_hash": "0x40cc2c7199cd639a3b38e340f30c2a52098afbafd1f40f46a90f0e5499d67c07",
+      "vegetation_score": 0.5970041414198253
+    },
+    {
+      "completed_at": 1772299763.979351,
+      "grass_outside_score": 0.17875929685640088,
+      "local_block_hash": "05826e90316143a5b2bd1b3cec0ca4d8b273425379598c8fb2489dfebb64a822",
+      "metadata_path": "",
+      "outdoor_score": 0.5716957191553126,
+      "proof_status": "verified",
+      "proof_url": "",
+      "session_id": "41b9bb8eb55f",
+      "started_at": 1772299752.8577092,
+      "token_id": "",
+      "tx_hash": "0x05826e90316143a5b2bd1b3cec0ca4d8b273425379598c8fb2489dfebb64a822",
+      "vegetation_score": 0.3126825877243229
     }
   ]
 }

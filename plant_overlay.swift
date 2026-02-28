@@ -244,10 +244,13 @@ class OverlayView: NSView {
 
     func drawChainCard(ctx: CGContext, rect: CGRect) {
         drawCard(ctx: ctx, rect: rect, title: "NFT + Immutable Chain")
+        let imageRect = CGRect(x: rect.maxX - 80, y: rect.maxY - 80, width: 58, height: 58)
         if let flower = flowerImageForLevel(status.flowerLevel) {
-            flower.draw(in: CGRect(x: rect.maxX - 78, y: rect.maxY - 78, width: 56, height: 56))
+            flower.draw(in: imageRect)
         }
-        drawBadgePill(ctx: ctx, rect: CGRect(x: rect.minX + 14, y: rect.maxY - 54, width: rect.width - 28, height: 18), text: status.chainBadge)
+        // Keep badge width constrained so it never overlaps the image.
+        let badgeRect = CGRect(x: rect.minX + 14, y: rect.maxY - 54, width: max(90, imageRect.minX - rect.minX - 22), height: 18)
+        drawBadgePill(ctx: ctx, rect: badgeRect, text: status.chainBadge)
         drawLabel("Token: \(status.tokenId.isEmpty ? "pending" : status.tokenId)", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 78), size: 11, color: .lightGray, weight: .regular)
         drawLabel("Tx: \(status.txHash.prefix(18))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 100), size: 11, color: .lightGray, weight: .regular)
         drawLabel("Block: \(status.localBlockHash.prefix(24))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 122), size: 11, color: .lightGray, weight: .regular)
@@ -284,7 +287,8 @@ class OverlayView: NSView {
     }
 
     func drawBadgePill(ctx: CGContext, rect: CGRect, text: String) {
-        let lower = text.lowercased()
+        let compact = compactChainLabel(text)
+        let lower = compact.lowercased()
         let fill: NSColor
         let stroke: NSColor
         if lower.contains("live") {
@@ -305,7 +309,21 @@ class OverlayView: NSView {
         ctx.setStrokeColor(stroke.cgColor)
         ctx.setLineWidth(1.4)
         ctx.strokePath()
-        drawLabel(text, at: CGPoint(x: rect.minX + 8, y: rect.minY + 4), size: 11, color: .white, weight: .semibold)
+        drawLabel(compact, at: CGPoint(x: rect.minX + 8, y: rect.minY + 4), size: 11, color: .white, weight: .semibold)
+    }
+
+    func compactChainLabel(_ text: String) -> String {
+        let lower = text.lowercased()
+        if lower.contains("fallback") || lower.contains("simulated") || lower.contains("local") {
+            return "LOCAL_LEDGER"
+        }
+        if lower.contains("retry") {
+            return "CHAIN_RETRYING"
+        }
+        if lower.contains("live") {
+            return "CHAIN_LIVE"
+        }
+        return text
     }
 
     func stageColor() -> NSColor {
