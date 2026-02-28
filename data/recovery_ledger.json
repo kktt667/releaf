@@ -1,0 +1,37 @@
+{
+  "last_chain_result": {
+    "badge": "CHAIN_FALLBACK_LOCAL_LEDGER",
+    "error": "",
+    "local_block_hash": "47bf71c8650b162f27a5769f7bd6acce7ccaa5700b7d685ea28a08f4a896dae0",
+    "metadata_path": "",
+    "proof_url": "",
+    "token_id": "",
+    "tx_hash": "0x47bf71c8650b162f27a5769f7bd6acce7ccaa5700b7d685ea28a08f4a896dae0"
+  },
+  "metrics": {
+    "decay_penalties": 1,
+    "last_outdoor_day": "2026-02-28",
+    "latest_tx_hash": "0x47bf71c8650b162f27a5769f7bd6acce7ccaa5700b7d685ea28a08f4a896dae0",
+    "nft_owner": "demo_wallet",
+    "outdoor_sessions": 1,
+    "score_value": 2.2,
+    "streak_days": 1,
+    "token_id": ""
+  },
+  "sessions": [
+    {
+      "completed_at": 1772298702.573441,
+      "grass_outside_score": 0.3079591392847238,
+      "local_block_hash": "47bf71c8650b162f27a5769f7bd6acce7ccaa5700b7d685ea28a08f4a896dae0",
+      "metadata_path": "",
+      "outdoor_score": 0.5490235825114541,
+      "proof_status": "verified",
+      "proof_url": "",
+      "session_id": "20cdd800dfa9",
+      "started_at": 1772298685.349717,
+      "token_id": "",
+      "tx_hash": "0x47bf71c8650b162f27a5769f7bd6acce7ccaa5700b7d685ea28a08f4a896dae0",
+      "vegetation_score": 0.5609215142926924
+    }
+  ]
+}
