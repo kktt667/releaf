@@ -1603,7 +1603,7 @@ def _build_mobile_upload_page(session_id: str) -> str:
     <div class="sub">Include grass/plants and outdoor context. Once selected, upload happens automatically.</div>
 
     <div class="badge-row">
-      <div id="chainBadge" class="badge-pill badge-fallback">CHAIN_FALLBACK_LOCAL_LEDGER</div>
+      <div id="chainBadge" class="badge-pill badge-fallback">CHAIN_SIMULATED_IMMUTABLE</div>
       <div id="sessionMeta" class="badge-mini">session: {session_id[:8]}</div>
     </div>
 
@@ -1673,7 +1673,7 @@ def _build_mobile_upload_page(session_id: str) -> str:
         const res = await fetch('/session/{session_id}/status');
         if (!res.ok) return;
         const data = await res.json();
-        const badge = data.chain_badge || 'CHAIN_FALLBACK_LOCAL_LEDGER';
+        const badge = data.chain_badge || 'CHAIN_SIMULATED_IMMUTABLE';
         chainBadgeEl.textContent = badge;
         setBadgeStyle(badge);
         sessionMetaEl.textContent = `level: ${{data.flower_level || 1}} | value: $${{(data.value_score || 0).toFixed(2)}}`;
@@ -1749,6 +1749,7 @@ def create_upload_app(upload_state: UploadState) -> Flask:
             level = upload_state.latest_flower_level
             value = upload_state.latest_value
             block_hash = upload_state.latest_block_hash
+            chain_badge = upload_state.latest_chain_badge
         proof_link = (
             f'<a href="{proof_url}" target="_blank" rel="noreferrer">Open Public Proof</a>'
             if proof_url
@@ -1764,6 +1765,7 @@ def create_upload_app(upload_state: UploadState) -> Flask:
     <p>Token: <b>{token_text}</b></p>
     <p>Flower Level: <b>{level}</b></p>
     <p>Value Score: <b>${value:.2f}</b></p>
+    <p>Chain Badge: <b>{chain_badge}</b></p>
     <p>Local Chain Block: <b>{block_hash or "Pending first verification"}</b></p>
     <p>{proof_link}</p>
     <p><a href="/" style="color:#bda9ff;">Back to upload home</a></p>
@@ -2052,6 +2054,14 @@ def _write_overlay_status(
         print(f"[TouchGrass] Could not write overlay status '{status_file}': {exc}")
 
 
+def _display_chain_badge(raw_badge: str) -> str:
+    if raw_badge == ChainBadge.CHAIN_LIVE.value:
+        return "CHAIN_LIVE"
+    if raw_badge == ChainBadge.CHAIN_RETRYING.value:
+        return "CHAIN_RETRYING"
+    return "CHAIN_SIMULATED_IMMUTABLE"
+
+
 def _run_chain_smoke_test(
     chain_bridge: ThirdwebBridge,
     wallet_address: str,
@@ -2171,7 +2181,7 @@ def main() -> None:
         upload_state.latest_flower_level = max(1, live_metrics.outdoor_sessions + 1)
         upload_state.latest_value = live_metrics.score_value
         upload_state.latest_token_id = live_metrics.token_id
-        upload_state.latest_chain_badge = "CHAIN_FALLBACK_LOCAL_LEDGER"
+        upload_state.latest_chain_badge = _display_chain_badge(ChainBadge.CHAIN_FALLBACK_LOCAL_LEDGER.value)
 
     cam = open_camera_with_retry(args.camera_index, args.camera_open_timeout)
     if cam is None:
@@ -2213,7 +2223,7 @@ def main() -> None:
         {
             "ts": time.time(),
             "state": app_state.value,
-            "chain_badge": chain_badge.value,
+            "chain_badge": _display_chain_badge(chain_badge.value),
             "face_detected": False,
             "eyes_detected": False,
             "looking_score": 0.0,
@@ -2443,6 +2453,7 @@ def main() -> None:
                             upload_state.latest_flower_level = max(1, live_metrics.outdoor_sessions + 1)
                             upload_state.latest_value = live_metrics.score_value
                             upload_state.latest_block_hash = chain_result.local_block_hash
+                            upload_state.latest_chain_badge = _display_chain_badge(chain_badge.value)
                         set_state(RecoveryAppState.MINTED)
                         mint_flash_until = now + 6.0
                         result_state_until = now + args.proof_result_seconds
@@ -2480,7 +2491,7 @@ def main() -> None:
 
             if now - last_overlay_status_write >= 0.2:
                 with upload_state.lock:
-                    upload_state.latest_chain_badge = chain_badge.value
+                    upload_state.latest_chain_badge = _display_chain_badge(chain_badge.value)
                     upload_state.latest_flower_level = max(1, live_metrics.outdoor_sessions + 1)
                     upload_state.latest_value = live_metrics.score_value
                     upload_state.latest_token_id = live_metrics.token_id
@@ -2489,7 +2500,7 @@ def main() -> None:
                     {
                         "ts": now,
                         "state": app_state.value,
-                        "chain_badge": chain_badge.value,
+                        "chain_badge": _display_chain_badge(chain_badge.value),
                         "face_detected": signals.face_detected,
                         "eyes_detected": signals.eyes_detected,
                         "looking_score": round(signals.looking_score, 4),
