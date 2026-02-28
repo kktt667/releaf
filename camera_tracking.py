@@ -17,7 +17,7 @@ import urllib.request
 import uuid
 
 import cv2
-from flask import Flask, request
+from flask import Flask, jsonify, request
 import numpy as np
 from PIL import Image
 import qrcode
@@ -62,6 +62,7 @@ class UploadState:
     latest_flower_level: int = 1
     latest_value: float = 0.0
     latest_block_hash: str = ""
+    latest_chain_badge: str = "CHAIN_FALLBACK_LOCAL_LEDGER"
 
 
 class RecoveryAppState(str, Enum):
@@ -1555,6 +1556,44 @@ def _build_mobile_upload_page(session_id: str) -> str:
       padding: 10px;
       color: #dde3ff;
     }}
+    .badge-row {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+      margin-bottom: 8px;
+    }}
+    .badge-pill {{
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      border: 1px solid #546084;
+      background: #272f45;
+      color: #dce6ff;
+      white-space: nowrap;
+    }}
+    .badge-live {{
+      background: #1f3b2f;
+      border-color: #4ec78f;
+      color: #aff6d0;
+    }}
+    .badge-fallback {{
+      background: #3f3720;
+      border-color: #d1b06a;
+      color: #ffe8b0;
+    }}
+    .badge-retry {{
+      background: #3f2328;
+      border-color: #db7f90;
+      color: #ffd0d8;
+    }}
+    .badge-mini {{
+      font-size: 0.72rem;
+      color: #b9c4ec;
+    }}
   </style>
 </head>
 <body>
@@ -1562,6 +1601,11 @@ def _build_mobile_upload_page(session_id: str) -> str:
     <div class="tag">Garden check-in active</div>
     <div class="title">Take a quick outdoor photo</div>
     <div class="sub">Include grass/plants and outdoor context. Once selected, upload happens automatically.</div>
+
+    <div class="badge-row">
+      <div id="chainBadge" class="badge-pill badge-fallback">CHAIN_FALLBACK_LOCAL_LEDGER</div>
+      <div id="sessionMeta" class="badge-mini">session: {session_id[:8]}</div>
+    </div>
 
     <input id="cameraInput" type="file" accept="image/*" capture="environment" style="display:none" />
     <button id="pickBtn" class="btn ghost">Open Camera</button>
@@ -1579,6 +1623,8 @@ def _build_mobile_upload_page(session_id: str) -> str:
     const preview = document.getElementById('preview');
     const previewImg = document.getElementById('previewImg');
     const statusEl = document.getElementById('status');
+    const chainBadgeEl = document.getElementById('chainBadge');
+    const sessionMetaEl = document.getElementById('sessionMeta');
 
     function setStatus(msg) {{
       statusEl.textContent = msg;
@@ -1611,6 +1657,31 @@ def _build_mobile_upload_page(session_id: str) -> str:
       }}
     }}
 
+    function setBadgeStyle(value) {{
+      chainBadgeEl.classList.remove('badge-live', 'badge-fallback', 'badge-retry');
+      if (value === 'CHAIN_LIVE') {{
+        chainBadgeEl.classList.add('badge-live');
+      }} else if (value === 'CHAIN_RETRYING') {{
+        chainBadgeEl.classList.add('badge-retry');
+      }} else {{
+        chainBadgeEl.classList.add('badge-fallback');
+      }}
+    }}
+
+    async function pollStatus() {{
+      try {{
+        const res = await fetch('/session/{session_id}/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const badge = data.chain_badge || 'CHAIN_FALLBACK_LOCAL_LEDGER';
+        chainBadgeEl.textContent = badge;
+        setBadgeStyle(badge);
+        sessionMetaEl.textContent = `level: ${{data.flower_level || 1}} | value: $${{(data.value_score || 0).toFixed(2)}}`;
+      }} catch (_) {{
+        // keep previous values; network hiccups are expected on mobile
+      }}
+    }}
+
     pickBtn.addEventListener('click', () => cameraInput.click());
     sendBtn.addEventListener('click', transmit);
     cameraInput.addEventListener('change', async (e) => {{
@@ -1628,6 +1699,10 @@ def _build_mobile_upload_page(session_id: str) -> str:
       setStatus(`Selected: ${{f.name}}. Uploading now...`);
       await transmit();
     }});
+
+    setBadgeStyle(chainBadgeEl.textContent);
+    pollStatus();
+    setInterval(pollStatus, 1200);
   </script>
 </body>
 </html>
@@ -1704,6 +1779,21 @@ def create_upload_app(upload_state: UploadState) -> Flask:
             return "Session not active. Re-scan a fresh QR from laptop.", 404
         return (_build_mobile_upload_page(session_id), 200)
 
+    @app.get("/session/<session_id>/status")
+    def session_status(session_id: str):
+        with upload_state.lock:
+            is_active = session_id == upload_state.active_session_id
+            payload = {
+                "active": is_active,
+                "chain_badge": upload_state.latest_chain_badge,
+                "flower_level": upload_state.latest_flower_level,
+                "value_score": float(upload_state.latest_value),
+                "token_id": upload_state.latest_token_id,
+                "proof_url": upload_state.latest_proof_url,
+                "block_hash": upload_state.latest_block_hash,
+            }
+        return jsonify(payload), 200
+
     @app.post("/session/<session_id>/upload")
     def upload(session_id: str) -> tuple[str, int]:
         with upload_state.lock:
@@ -1764,127 +1854,37 @@ def draw_debug_overlay(
     status_message: str | None = None,
     demo_step_text: str = "",
 ) -> np.ndarray:
-    canvas = np.full_like(frame_bgr, (16, 17, 24))
     now = time.time()
+    # Keep camera window minimal: only tiny status strip.
+    canvas = frame_bgr.copy()
     h_total, w_total = canvas.shape[:2]
-    flower_level = max(1, live_metrics.outdoor_sessions + 1)
-    health_score = int(np.clip(56 + (7 * live_metrics.outdoor_sessions) - (8 * live_metrics.decay_penalties), 0, 100))
-    money_score = max(0.0, live_metrics.score_value * 10.0)
-    eye_ok = signals.face_detected and signals.eyes_detected
-
-    # Single unified dashboard widget (right side).
-    widget_w = min(410, max(340, int(w_total * 0.42)))
-    wx = w_total - widget_w - 12
-    wy = 12
-    wh = h_total - 24
-    cv2.rectangle(canvas, (wx, wy), (wx + widget_w, wy + wh), (25, 27, 38), -1)
-    cv2.rectangle(canvas, (wx, wy), (wx + widget_w, wy + wh), (92, 98, 126), 2)
-    cv2.putText(canvas, "TouchGrass Demo Widget", (wx + 14, wy + 28), cv2.FONT_HERSHEY_DUPLEX, 0.72, (232, 236, 255), 2, cv2.LINE_AA)
-
-    # Focus subsection.
-    sec1_y = wy + 42
-    cv2.rectangle(canvas, (wx + 12, sec1_y), (wx + widget_w - 12, sec1_y + 98), (35, 39, 54), -1)
-    cv2.putText(canvas, "Focus", (wx + 18, sec1_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (210, 220, 255), 1, cv2.LINE_AA)
-    mini = _safe_resize_keep_aspect(frame_bgr, target_h=62)
-    mh, mw = mini.shape[:2]
-    mw = min(mw, 120)
-    canvas[sec1_y + 30 : sec1_y + 30 + mh, wx + 16 : wx + 16 + mw] = mini[:, :mw]
-    cv2.rectangle(canvas, (wx + 16, sec1_y + 30), (wx + 16 + mw, sec1_y + 30 + mh), (115, 122, 158), 1)
-    cv2.circle(canvas, (wx + 152, sec1_y + 42), 6, (86, 205, 122) if eye_ok else (84, 126, 232), -1, cv2.LINE_AA)
-    cv2.putText(canvas, f"Eyes {'Seen' if eye_ok else 'Searching'}", (wx + 165, sec1_y + 46), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (220, 225, 245), 1, cv2.LINE_AA)
+    cv2.rectangle(canvas, (0, 0), (w_total, 26), (18, 20, 28), -1)
     cv2.putText(
         canvas,
-        f"Look {signals.looking_score:.2f} | Face {'YES' if signals.face_detected else 'NO'}",
-        (wx + 152, sec1_y + 70),
+        f"{app_state.value} | look {signals.looking_score:.2f} | eyes {'YES' if signals.eyes_detected else 'NO'}",
+        (8, 18),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.45,
-        (192, 198, 225),
-        1,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        canvas,
-        f"Screen {screen_time_seconds/60.0:.1f}m  Streak {focus_streak_seconds:.1f}s",
-        (wx + 152, sec1_y + 92),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.43,
-        (182, 188, 214),
+        (232, 236, 255),
         1,
         cv2.LINE_AA,
     )
 
-    # State subsection.
-    sec2_y = sec1_y + 108
-    cv2.rectangle(canvas, (wx + 12, sec2_y), (wx + widget_w - 12, sec2_y + 76), (35, 39, 54), -1)
-    cv2.putText(canvas, "State", (wx + 18, sec2_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (210, 220, 255), 1, cv2.LINE_AA)
-    cv2.putText(canvas, app_state.value, (wx + 18, sec2_y + 52), cv2.FONT_HERSHEY_DUPLEX, 0.78, (168, 226, 182), 2, cv2.LINE_AA)
-    cv2.putText(canvas, chain_badge.value, (wx + 210, sec2_y + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (168, 178, 210), 1, cv2.LINE_AA)
-
-    # QR + mission subsection.
-    sec3_y = sec2_y + 86
-    sec3_h = 170
-    cv2.rectangle(canvas, (wx + 12, sec3_y), (wx + widget_w - 12, sec3_y + sec3_h), (35, 39, 54), -1)
-    cv2.putText(canvas, "Mission", (wx + 18, sec3_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (210, 220, 255), 1, cv2.LINE_AA)
-    if qr_tile is not None:
-        q = _safe_resize_keep_aspect(qr_tile, target_h=96)
-        qh, qw = q.shape[:2]
-        qx = wx + 18
-        qy = sec3_y + 30
-        canvas[qy : qy + qh, qx : qx + qw] = q
-        cv2.rectangle(canvas, (qx - 1, qy - 1), (qx + qw + 1, qy + qh + 1), (130, 138, 171), 1)
-    mission_text = "Press Y, then scan QR and upload outdoor photo."
-    cv2.putText(canvas, mission_text[:42], (wx + 130, sec3_y + 66), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (220, 225, 245), 1, cv2.LINE_AA)
-    cv2.putText(canvas, mission_text[42:], (wx + 130, sec3_y + 86), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (220, 225, 245), 1, cv2.LINE_AA)
-    event_text = status_message or demo_step_text or "Waiting for next action."
-    cv2.putText(canvas, event_text[:50], (wx + 18, sec3_y + 146), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (188, 196, 224), 1, cv2.LINE_AA)
-
-    # Flower + value subsection.
-    sec4_y = sec3_y + sec3_h + 10
-    sec4_h = wh - (sec4_y - wy) - 12
-    cv2.rectangle(canvas, (wx + 12, sec4_y), (wx + widget_w - 12, sec4_y + sec4_h), (35, 39, 54), -1)
-    cv2.putText(canvas, "Flower Wallet", (wx + 18, sec4_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (210, 220, 255), 1, cv2.LINE_AA)
-    _draw_flower_asset(canvas, flower_assets, flower_level, wx + 18, sec4_y + 30, target_h=76)
-    cv2.putText(canvas, f"Level {flower_level}", (wx + 110, sec4_y + 56), cv2.FONT_HERSHEY_DUPLEX, 0.66, (228, 232, 255), 2, cv2.LINE_AA)
-    cv2.putText(canvas, f"HP {health_score}%   Value ${money_score:.2f}", (wx + 110, sec4_y + 82), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (190, 204, 228), 1, cv2.LINE_AA)
-    cv2.putText(
-        canvas,
-        f"Sessions {live_metrics.outdoor_sessions} | Streak {live_metrics.streak_days}d | Decay {live_metrics.decay_penalties}",
-        (wx + 18, sec4_y + 108),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.43,
-        (186, 193, 220),
-        1,
-        cv2.LINE_AA,
-    )
-    if live_metrics.token_id:
-        cv2.putText(canvas, f"Token #{live_metrics.token_id}", (wx + 18, sec4_y + 132), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (126, 214, 150), 1, cv2.LINE_AA)
-    if latest_proof_url:
-        cv2.putText(canvas, "Proof link in /my-flower", (wx + 18, sec4_y + 154), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (120, 186, 226), 1, cv2.LINE_AA)
-    if live_metrics.latest_tx_hash:
-        cv2.putText(canvas, f"Local chain tx {live_metrics.latest_tx_hash[:14]}..", (wx + 18, sec4_y + 176), cv2.FONT_HERSHEY_SIMPLEX, 0.41, (164, 188, 224), 1, cv2.LINE_AA)
-
-    # Friendly center hint prompt.
     if prompt_visible:
-        cx0 = max(20, (w_total // 2) - 250)
-        cy0 = max(120, (h_total // 2) - 50)
-        cv2.rectangle(canvas, (cx0, cy0), (cx0 + 500, cy0 + 96), (40, 45, 62), -1)
-        cv2.rectangle(canvas, (cx0, cy0), (cx0 + 500, cy0 + 96), (134, 147, 188), 2)
-        cv2.putText(canvas, "Time for a quick plant break", (cx0 + 16, cy0 + 36), cv2.FONT_HERSHEY_DUPLEX, 0.78, (227, 233, 255), 2, cv2.LINE_AA)
-        cv2.putText(canvas, "Press Y to begin the outdoor check-in", (cx0 + 16, cy0 + 66), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (194, 203, 232), 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (8, h_total - 46), (w_total - 8, h_total - 8), (35, 41, 61), -1)
+        cv2.rectangle(canvas, (8, h_total - 46), (w_total - 8, h_total - 8), (132, 146, 188), 1)
+        cv2.putText(canvas, "Press Y/Enter/Space (or R force) for outdoor check-in", (16, h_total - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (228, 234, 255), 1, cv2.LINE_AA)
 
-    # Obvious NFT mint popup.
+    # Only show the big NFT pop once minted.
     if mint_flash_until > now:
         alpha = min(1.0, max(0.25, (mint_flash_until - now) / 6.0))
         flash = canvas.copy()
-        cx = max(30, (w_total // 2) - 320)
-        cy = max(48, (h_total // 2) - 110)
-        cv2.rectangle(flash, (cx, cy), (cx + 640, cy + 220), (22, 75, 39), -1)
-        cv2.rectangle(flash, (cx, cy), (cx + 640, cy + 220), (137, 235, 170), 3)
-        cv2.putText(flash, "NFT UPGRADED", (cx + 150, cy + 70), cv2.FONT_HERSHEY_DUPLEX, 1.35, (242, 255, 245), 3, cv2.LINE_AA)
-        if live_metrics.token_id:
-            cv2.putText(flash, f"Token #{live_metrics.token_id}", (cx + 30, cy + 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (232, 245, 238), 2, cv2.LINE_AA)
-        cv2.putText(flash, f"New Value ${money_score:.2f}", (cx + 30, cy + 155), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (232, 245, 238), 2, cv2.LINE_AA)
-        cv2.putText(flash, "Open /my-flower on phone", (cx + 30, cy + 188), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (218, 235, 224), 2, cv2.LINE_AA)
+        cx = max(18, (w_total // 2) - 140)
+        cy = max(30, (h_total // 2) - 52)
+        cv2.rectangle(flash, (cx, cy), (cx + 280, cy + 104), (20, 76, 42), -1)
+        cv2.rectangle(flash, (cx, cy), (cx + 280, cy + 104), (137, 235, 170), 2)
+        cv2.putText(flash, "NFT UPGRADED", (cx + 34, cy + 40), cv2.FONT_HERSHEY_DUPLEX, 0.75, (242, 255, 245), 2, cv2.LINE_AA)
+        cv2.putText(flash, f"${max(0.0, live_metrics.score_value*10.0):.2f}", (cx + 98, cy + 78), cv2.FONT_HERSHEY_DUPLEX, 0.82, (232, 245, 238), 2, cv2.LINE_AA)
         cv2.addWeighted(flash, alpha, canvas, 1.0 - alpha, 0, canvas)
 
     return canvas
@@ -2040,6 +2040,18 @@ def _write_overlay_stage(stage_file: str, app_state: RecoveryAppState) -> None:
         print(f"[TouchGrass] Could not write stage file '{stage_file}': {exc}")
 
 
+def _write_overlay_status(
+    status_file: str,
+    payload: dict,
+) -> None:
+    try:
+        os.makedirs(os.path.dirname(status_file), exist_ok=True)
+        with open(status_file, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+    except OSError as exc:
+        print(f"[TouchGrass] Could not write overlay status '{status_file}': {exc}")
+
+
 def _run_chain_smoke_test(
     chain_bridge: ThirdwebBridge,
     wallet_address: str,
@@ -2100,6 +2112,9 @@ def main() -> None:
     parser.add_argument("--emergency-artifacts-dir", type=str, default=os.path.join("data", "proof_artifacts"))
     parser.add_argument("--flowers-folder", type=str, default="flowers")
     parser.add_argument("--overlay-stage-file", type=str, default="stage.txt")
+    parser.add_argument("--overlay-status-file", type=str, default=os.path.join("data", "overlay_status.json"))
+    parser.add_argument("--overlay-qr-file", type=str, default=os.path.join("data", "current_qr.png"))
+    parser.add_argument("--auto-recovery-start", action="store_true")
     parser.add_argument("--chain-smoke-test", action="store_true")
     parser.add_argument("--chain-smoke-token-id", type=str, default="")
     args = parser.parse_args()
@@ -2110,6 +2125,7 @@ def main() -> None:
         args.decay_stage_seconds = 1.6
         args.min_absence_seconds = 1.8
         args.session_timeout_seconds = 90.0
+        args.auto_recovery_start = True
 
     chain_bridge = ThirdwebBridge(
         enabled=args.mint_enabled,
@@ -2142,7 +2158,9 @@ def main() -> None:
     upload_state = UploadState()
     local_ip = args.upload_host_ip.strip() or get_local_ip()
     upload_root_url = f"http://{local_ip}:{args.upload_port}/"
+    os.makedirs(os.path.dirname(args.overlay_qr_file), exist_ok=True)
     qr_tile = make_qr_tile(upload_root_url, size_px=240)
+    cv2.imwrite(args.overlay_qr_file, qr_tile)
     start_upload_server(upload_state, host="0.0.0.0", port=args.upload_port)
     print(f"[TouchGrass] Upload URL: {upload_root_url}")
 
@@ -2153,6 +2171,7 @@ def main() -> None:
         upload_state.latest_flower_level = max(1, live_metrics.outdoor_sessions + 1)
         upload_state.latest_value = live_metrics.score_value
         upload_state.latest_token_id = live_metrics.token_id
+        upload_state.latest_chain_badge = "CHAIN_FALLBACK_LOCAL_LEDGER"
 
     cam = open_camera_with_retry(args.camera_index, args.camera_open_timeout)
     if cam is None:
@@ -2160,8 +2179,8 @@ def main() -> None:
     window_name = "Hackathon Camera Tracking (q to quit)"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     if args.demo_mode:
-        cv2.resizeWindow(window_name, 360, 230)
-        cv2.moveWindow(window_name, 16, 16)
+        cv2.resizeWindow(window_name, 380, 240)
+        cv2.moveWindow(window_name, 18, 360)
 
     app_state = RecoveryAppState.ONLINE
     chain_badge = ChainBadge.CHAIN_FALLBACK_LOCAL_LEDGER
@@ -2174,9 +2193,12 @@ def main() -> None:
     result_state_until = 0.0
     mint_flash_until = 0.0
     latest_proof_url = ""
+    latest_block_hash = ""
+    last_mint_at = 0.0
     screen_time_seconds = 0.0
     focus_streak_seconds = 0.0
     last_frame_ts = time.time()
+    last_overlay_status_write = 0.0
 
     status_message = (
         "Preflight ready. "
@@ -2186,6 +2208,34 @@ def main() -> None:
     )
     status_message_until = time.time() + 8.0
     _write_overlay_stage(args.overlay_stage_file, app_state)
+    _write_overlay_status(
+        args.overlay_status_file,
+        {
+            "ts": time.time(),
+            "state": app_state.value,
+            "chain_badge": chain_badge.value,
+            "face_detected": False,
+            "eyes_detected": False,
+            "looking_score": 0.0,
+            "screen_time_seconds": 0.0,
+            "focus_streak_seconds": 0.0,
+            "status_message": status_message,
+            "demo_step": _demo_step_text(app_state) if args.demo_mode else "",
+            "flower_level": max(1, live_metrics.outdoor_sessions + 1),
+            "health_score": int(np.clip(56 + (7 * live_metrics.outdoor_sessions) - (8 * live_metrics.decay_penalties), 0, 100)),
+            "value_score": round(live_metrics.score_value, 2),
+            "sessions": live_metrics.outdoor_sessions,
+            "streak_days": live_metrics.streak_days,
+            "decay_penalties": live_metrics.decay_penalties,
+            "token_id": live_metrics.token_id,
+            "tx_hash": live_metrics.latest_tx_hash,
+            "proof_url": "",
+            "local_block_hash": "",
+            "last_mint_at": 0.0,
+            "mint_flash_until": 0.0,
+            "qr_file": args.overlay_qr_file,
+        },
+    )
 
     def set_state(new_state: RecoveryAppState) -> None:
         nonlocal app_state, state_started_at, live_metrics
@@ -2196,6 +2246,36 @@ def main() -> None:
         _write_overlay_stage(args.overlay_stage_file, app_state)
         if new_state == RecoveryAppState.DECAY:
             live_metrics = ledger.mark_decay()
+
+    def start_recovery_session(now: float, signals: TrackingSignals, allow_no_face: bool = False) -> bool:
+        nonlocal current_session, qr_tile, prompt_visible, absent_started_at, status_message, status_message_until
+        if current_session is not None:
+            return False
+        if not signals.face_detected and not allow_no_face:
+            status_message = "Cannot start recovery: face must be visible at session start."
+            status_message_until = now + 3.0
+            return False
+        session_id = uuid.uuid4().hex[:12]
+        current_session = RecoverySession(
+            session_id=session_id,
+            started_at=now,
+            state_started_at=now,
+            user_present_at_start=signals.face_detected,
+        )
+        with upload_state.lock:
+            upload_state.active_session_id = session_id
+        session_url = f"http://{local_ip}:{args.upload_port}/session/{session_id}"
+        qr_tile = make_qr_tile(session_url, size_px=240)
+        cv2.imwrite(args.overlay_qr_file, qr_tile)
+        set_state(RecoveryAppState.OUTSIDE_MODE)
+        prompt_visible = False
+        absent_started_at = None
+        if allow_no_face and not signals.face_detected:
+            status_message = "Recovery auto-started for demo. Scan QR from phone and go outside."
+        else:
+            status_message = "Recovery session started. Scan QR from phone and go outside."
+        status_message_until = now + 8.0
+        return True
 
     try:
         while True:
@@ -2245,6 +2325,7 @@ def main() -> None:
                     current_session = None
                     set_state(RecoveryAppState.ONLINE)
                     qr_tile = make_qr_tile(upload_root_url, size_px=240)
+                    cv2.imwrite(args.overlay_qr_file, qr_tile)
                     status_message = "Session timed out. Recovery reset."
                     status_message_until = now + 5.0
                 else:
@@ -2274,7 +2355,7 @@ def main() -> None:
                 if current_session is None or upload_session_id != current_session.session_id:
                     status_message = "Ignored upload from stale/non-active session."
                     status_message_until = now + 3.0
-                elif current_session.absence_validated_at is None:
+                elif current_session.absence_validated_at is None and not args.demo_mode:
                     status_message = "Upload rejected: leave screen first (absence not yet validated)."
                     status_message_until = now + 4.0
                 else:
@@ -2283,7 +2364,15 @@ def main() -> None:
                     current_session.vegetation_score = upload_signals.vegetation_score
                     current_session.outdoor_score = upload_signals.outdoor_score
                     current_session.grass_outside_score = upload_signals.grass_outside_score
-                    if upload_signals.grass_outside_detected:
+                    demo_verified = (
+                        args.demo_mode
+                        and (
+                            upload_signals.grass_outside_detected
+                            or (upload_signals.outdoor_score >= 0.20 and upload_signals.vegetation_score >= 0.16)
+                            or upload_signals.outdoor_score >= 0.32
+                        )
+                    )
+                    if upload_signals.grass_outside_detected or demo_verified:
                         current_session.proof_status = "verified"
                         current_session.completed_at = now
                         set_state(RecoveryAppState.PROOF_VERIFIED)
@@ -2330,6 +2419,8 @@ def main() -> None:
                         if not chain_result.tx_hash:
                             chain_result.tx_hash = "0x" + local_block_hash
                         print(f"[TouchGrass] Local immutable block #{chain_index}: {local_block_hash}")
+                        latest_block_hash = local_block_hash
+                        last_mint_at = now
 
                         current_session.nft_tx_hash = chain_result.tx_hash
                         current_session.token_id = chain_result.token_id
@@ -2359,6 +2450,7 @@ def main() -> None:
                             upload_state.active_session_id = ""
                         current_session = None
                         qr_tile = make_qr_tile(upload_root_url, size_px=240)
+                        cv2.imwrite(args.overlay_qr_file, qr_tile)
                         if chain_result.proof_url:
                             status_message = (
                                 f"Proof verified. Local mint + IPFS proof ready. Value=${live_metrics.score_value:.2f}"
@@ -2371,7 +2463,7 @@ def main() -> None:
                     else:
                         current_session.proof_status = "rejected"
                         status_message = (
-                            "Upload fail: stronger grass+outside evidence needed "
+                            "Upload fail: try a brighter outdoor shot with visible plants "
                             f"(veg={upload_signals.vegetation_score:.2f}, out={upload_signals.outdoor_score:.2f})."
                         )
                         status_message_until = now + 5.0
@@ -2385,6 +2477,42 @@ def main() -> None:
             if app_state == RecoveryAppState.OUTSIDE_MODE and status_message is None:
                 status_message = "Outside mode active. Leave screen, then upload proof from session QR."
                 status_message_until = now + 0.5
+
+            if now - last_overlay_status_write >= 0.2:
+                with upload_state.lock:
+                    upload_state.latest_chain_badge = chain_badge.value
+                    upload_state.latest_flower_level = max(1, live_metrics.outdoor_sessions + 1)
+                    upload_state.latest_value = live_metrics.score_value
+                    upload_state.latest_token_id = live_metrics.token_id
+                _write_overlay_status(
+                    args.overlay_status_file,
+                    {
+                        "ts": now,
+                        "state": app_state.value,
+                        "chain_badge": chain_badge.value,
+                        "face_detected": signals.face_detected,
+                        "eyes_detected": signals.eyes_detected,
+                        "looking_score": round(signals.looking_score, 4),
+                        "screen_time_seconds": round(screen_time_seconds, 2),
+                        "focus_streak_seconds": round(focus_streak_seconds, 2),
+                        "status_message": status_message or "",
+                        "demo_step": _demo_step_text(app_state) if args.demo_mode else "",
+                        "flower_level": max(1, live_metrics.outdoor_sessions + 1),
+                        "health_score": int(np.clip(56 + (7 * live_metrics.outdoor_sessions) - (8 * live_metrics.decay_penalties), 0, 100)),
+                        "value_score": round(live_metrics.score_value, 2),
+                        "sessions": live_metrics.outdoor_sessions,
+                        "streak_days": live_metrics.streak_days,
+                        "decay_penalties": live_metrics.decay_penalties,
+                        "token_id": live_metrics.token_id,
+                        "tx_hash": live_metrics.latest_tx_hash,
+                        "proof_url": latest_proof_url,
+                        "local_block_hash": latest_block_hash,
+                        "last_mint_at": last_mint_at,
+                        "mint_flash_until": mint_flash_until,
+                        "qr_file": args.overlay_qr_file,
+                    },
+                )
+                last_overlay_status_write = now
 
             debug_frame = draw_debug_overlay(
                 frame_bgr=frame,
@@ -2408,27 +2536,21 @@ def main() -> None:
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
-            if prompt_visible and key in (ord("y"), ord("Y")):
-                if not signals.face_detected:
-                    status_message = "Cannot start recovery: face must be visible at session start."
-                    status_message_until = now + 4.0
-                    continue
-                session_id = uuid.uuid4().hex[:12]
-                current_session = RecoverySession(
-                    session_id=session_id,
-                    started_at=now,
-                    state_started_at=now,
-                    user_present_at_start=signals.face_detected,
-                )
-                with upload_state.lock:
-                    upload_state.active_session_id = session_id
-                session_url = f"http://{local_ip}:{args.upload_port}/session/{session_id}"
-                qr_tile = make_qr_tile(session_url, size_px=240)
-                set_state(RecoveryAppState.OUTSIDE_MODE)
-                prompt_visible = False
-                absent_started_at = None
-                status_message = "Recovery session started. Scan QR from phone and go outside."
-                status_message_until = now + 8.0
+            if (
+                prompt_visible
+                and args.auto_recovery_start
+                and app_state == RecoveryAppState.RECOVERY_REQUIRED
+                and (now - state_started_at) > 0.8
+            ):
+                start_recovery_session(now, signals, allow_no_face=True)
+            if prompt_visible and key in (ord("y"), ord("Y"), 13, 32):
+                start_recovery_session(now, signals, allow_no_face=args.demo_mode)
+            elif key in (ord("r"), ord("R")):
+                # Demo escape hatch: force start recovery flow even if prompt focus is missed.
+                started = start_recovery_session(now, signals, allow_no_face=True)
+                if not started:
+                    status_message = "Recovery already active or unavailable."
+                    status_message_until = now + 2.0
             elif prompt_visible and key in (ord("n"), ord("N")):
                 prompt_visible = False
                 look_started_at = now - (args.warning_hold_seconds * 0.5)

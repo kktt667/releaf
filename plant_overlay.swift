@@ -7,6 +7,30 @@ enum Stage: String {
     case recovery
 }
 
+struct OverlayStatus {
+    var state: Stage = .normal
+    var chainBadge: String = "CHAIN_FALLBACK_LOCAL_LEDGER"
+    var faceDetected: Bool = false
+    var eyesDetected: Bool = false
+    var lookingScore: Double = 0.0
+    var screenTimeSeconds: Double = 0.0
+    var focusStreakSeconds: Double = 0.0
+    var statusMessage: String = ""
+    var demoStep: String = ""
+    var flowerLevel: Int = 1
+    var healthScore: Int = 56
+    var valueScore: Double = 0.0
+    var sessions: Int = 0
+    var streakDays: Int = 0
+    var decayPenalties: Int = 0
+    var tokenId: String = ""
+    var txHash: String = ""
+    var proofURL: String = ""
+    var localBlockHash: String = ""
+    var mintFlashUntil: Double = 0.0
+    var qrFile: String = "data/current_qr.png"
+}
+
 class OverlayWindow: NSWindow {
     init() {
         super.init(
@@ -26,9 +50,10 @@ class OverlayWindow: NSWindow {
 }
 
 class OverlayView: NSView {
-    var stage: Stage = .normal
-    var lastStageValue = ""
     var pulse: CGFloat = 0.0
+    var status = OverlayStatus()
+    var qrImage: NSImage?
+    var lastQrPath: String = ""
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -36,8 +61,8 @@ class OverlayView: NSView {
         Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
-        Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-            self?.checkStageFile()
+        Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.readStatus()
         }
     }
 
@@ -46,24 +71,47 @@ class OverlayView: NSView {
     }
 
     func tick() {
-        pulse += 0.06
-        if pulse > 1000 { pulse = 0 }
+        pulse += 0.08
+        if pulse > 10_000 { pulse = 0 }
         needsDisplay = true
     }
 
-    func checkStageFile() {
-        let path = FileManager.default.currentDirectoryPath + "/stage.txt"
+    func readStatus() {
+        let path = FileManager.default.currentDirectoryPath + "/data/overlay_status.json"
         guard
-            let value = try? String(contentsOfFile: path, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased(),
-            value != lastStageValue,
-            let parsed = Stage(rawValue: value)
+            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 
-        lastStageValue = value
-        stage = parsed
-        print("[overlay] stage -> \(value)")
+        if let stateRaw = json["state"] as? String, let st = Stage(rawValue: stateRaw.lowercased()) {
+            status.state = st
+        }
+        status.chainBadge = json["chain_badge"] as? String ?? status.chainBadge
+        status.faceDetected = json["face_detected"] as? Bool ?? false
+        status.eyesDetected = json["eyes_detected"] as? Bool ?? false
+        status.lookingScore = json["looking_score"] as? Double ?? 0.0
+        status.screenTimeSeconds = json["screen_time_seconds"] as? Double ?? 0.0
+        status.focusStreakSeconds = json["focus_streak_seconds"] as? Double ?? 0.0
+        status.statusMessage = json["status_message"] as? String ?? ""
+        status.demoStep = json["demo_step"] as? String ?? ""
+        status.flowerLevel = json["flower_level"] as? Int ?? 1
+        status.healthScore = json["health_score"] as? Int ?? 56
+        status.valueScore = json["value_score"] as? Double ?? 0.0
+        status.sessions = json["sessions"] as? Int ?? 0
+        status.streakDays = json["streak_days"] as? Int ?? 0
+        status.decayPenalties = json["decay_penalties"] as? Int ?? 0
+        status.tokenId = json["token_id"] as? String ?? ""
+        status.txHash = json["tx_hash"] as? String ?? ""
+        status.proofURL = json["proof_url"] as? String ?? ""
+        status.localBlockHash = json["local_block_hash"] as? String ?? ""
+        status.mintFlashUntil = json["mint_flash_until"] as? Double ?? 0.0
+        status.qrFile = json["qr_file"] as? String ?? status.qrFile
+
+        let qrPath = status.qrFile.hasPrefix("/") ? status.qrFile : (FileManager.default.currentDirectoryPath + "/" + status.qrFile)
+        if qrPath != lastQrPath || qrImage == nil {
+            qrImage = NSImage(contentsOfFile: qrPath)
+            lastQrPath = qrPath
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -71,127 +119,133 @@ class OverlayView: NSView {
         let w = bounds.width
         let h = bounds.height
 
-        // Soft stage effects first, then widget cards.
         drawStageEffects(ctx: ctx, w: w, h: h)
-        drawEyeCard(ctx: ctx, x: 18, y: h - 140, w: 210, h: 118)
-        drawStateCard(ctx: ctx, x: 18, y: h - 278, w: 260, h: 120)
-        drawRecoveryCard(ctx: ctx, x: w - 292, y: h - 188, w: 270, h: 166)
-    }
 
-    func stageColor() -> NSColor {
-        switch stage {
-        case .normal: return NSColor(calibratedRed: 0.38, green: 0.73, blue: 0.53, alpha: 0.95)
-        case .warning: return NSColor(calibratedRed: 0.93, green: 0.70, blue: 0.37, alpha: 0.95)
-        case .decay: return NSColor(calibratedRed: 0.84, green: 0.53, blue: 0.60, alpha: 0.95)
-        case .recovery: return NSColor(calibratedRed: 0.46, green: 0.70, blue: 0.94, alpha: 0.95)
-        }
-    }
+        // Left stacked widgets; camera app window sits below these.
+        drawStatusCard(ctx: ctx, rect: CGRect(x: 14, y: h - 162, width: 320, height: 146))
+        drawStatsCard(ctx: ctx, rect: CGRect(x: 14, y: h - 330, width: 320, height: 154))
 
-    func stageText() -> String {
-        switch stage {
-        case .normal: return "Calm mode"
-        case .warning: return "Warning mode"
-        case .decay: return "Soft decay mode"
-        case .recovery: return "Healing mode"
-        }
+        // Right widgets with QR + chain.
+        drawQRCard(ctx: ctx, rect: CGRect(x: w - 282, y: h - 302, width: 268, height: 286))
+        drawChainCard(ctx: ctx, rect: CGRect(x: w - 282, y: h - 472, width: 268, height: 156))
+
+        drawMintPopup(ctx: ctx, w: w, h: h)
     }
 
     func drawStageEffects(ctx: CGContext, w: CGFloat, h: CGFloat) {
         let phase = (sin(pulse) + 1.0) * 0.5
-        let center = CGPoint(x: w * 0.5, y: h * 0.5)
-        let radius = max(w, h) * 0.7
-
-        switch stage {
+        switch status.state {
         case .normal:
-            // Barely-there neutral tint
             ctx.setFillColor(NSColor(calibratedWhite: 0.0, alpha: 0.04).cgColor)
             ctx.fill(bounds)
         case .warning:
-            let colors = [
-                NSColor(calibratedRed: 1.0, green: 0.78, blue: 0.35, alpha: 0.03).cgColor,
-                NSColor(calibratedRed: 1.0, green: 0.64, blue: 0.18, alpha: 0.09).cgColor,
-            ] as CFArray
-            let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 1.0])!
-            ctx.drawRadialGradient(g, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: .drawsAfterEndLocation)
+            ctx.setFillColor(NSColor(calibratedRed: 0.95, green: 0.75, blue: 0.25, alpha: 0.15 + (0.08 * phase)).cgColor)
+            ctx.fill(bounds)
         case .decay:
-            // Softer, theme-matching decay (not harsh red).
-            let edgeAlpha = 0.10 + (0.06 * phase)
-            let colors = [
-                NSColor(calibratedRed: 0.80, green: 0.50, blue: 0.52, alpha: 0.03).cgColor,
-                NSColor(calibratedRed: 0.55, green: 0.26, blue: 0.34, alpha: edgeAlpha).cgColor,
-            ] as CFArray
-            let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 1.0])!
-            ctx.drawRadialGradient(g, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: .drawsAfterEndLocation)
-            // Gentle vignette ring
-            ctx.setStrokeColor(NSColor(calibratedRed: 0.67, green: 0.34, blue: 0.45, alpha: 0.24).cgColor)
+            ctx.setFillColor(NSColor(calibratedRed: 0.75, green: 0.35, blue: 0.40, alpha: 0.20 + (0.10 * phase)).cgColor)
+            ctx.fill(bounds)
+            ctx.setStrokeColor(NSColor(calibratedRed: 0.88, green: 0.50, blue: 0.58, alpha: 0.55).cgColor)
             ctx.setLineWidth(10)
             ctx.stroke(bounds.insetBy(dx: 8, dy: 8))
         case .recovery:
-            // Pleasant healing sweep + cool glow.
-            let glow = 0.12 + (0.08 * phase)
-            let colors = [
-                NSColor(calibratedRed: 0.45, green: 0.90, blue: 0.88, alpha: 0.04).cgColor,
-                NSColor(calibratedRed: 0.20, green: 0.66, blue: 0.95, alpha: glow).cgColor,
-            ] as CFArray
-            let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 1.0])!
-            ctx.drawRadialGradient(g, startCenter: center, startRadius: 0, endCenter: center, endRadius: radius, options: .drawsAfterEndLocation)
-
-            // Soft moving highlight stripe
-            let x = (w + 220) * phase - 220
-            let stripeRect = CGRect(x: x, y: 0, width: 180, height: h)
-            ctx.saveGState()
-            ctx.clip(to: bounds)
-            ctx.setFillColor(NSColor(calibratedRed: 0.75, green: 1.0, blue: 0.95, alpha: 0.08).cgColor)
-            ctx.fill(stripeRect)
-            ctx.restoreGState()
+            ctx.setFillColor(NSColor(calibratedRed: 0.24, green: 0.64, blue: 0.96, alpha: 0.15 + (0.10 * phase)).cgColor)
+            ctx.fill(bounds)
+            let stripeX = ((w + 200) * phase) - 180
+            ctx.setFillColor(NSColor(calibratedRed: 0.75, green: 1.0, blue: 0.95, alpha: 0.16).cgColor)
+            ctx.fill(CGRect(x: stripeX, y: 0, width: 180, height: h))
         }
     }
 
-    func drawCardBackground(ctx: CGContext, rect: CGRect) {
+    func drawCard(ctx: CGContext, rect: CGRect, title: String) {
         let path = CGPath(roundedRect: rect, cornerWidth: 16, cornerHeight: 16, transform: nil)
         ctx.addPath(path)
-        ctx.setFillColor(NSColor(calibratedRed: 0.12, green: 0.14, blue: 0.22, alpha: 0.72).cgColor)
+        ctx.setFillColor(NSColor(calibratedRed: 0.10, green: 0.12, blue: 0.19, alpha: 0.82).cgColor)
         ctx.fillPath()
         ctx.addPath(path)
-        ctx.setStrokeColor(NSColor(calibratedRed: 0.52, green: 0.56, blue: 0.74, alpha: 0.55).cgColor)
-        ctx.setLineWidth(1.5)
+        ctx.setStrokeColor(NSColor(calibratedRed: 0.50, green: 0.56, blue: 0.72, alpha: 0.70).cgColor)
+        ctx.setLineWidth(1.8)
         ctx.strokePath()
+        drawLabel(title, at: CGPoint(x: rect.minX + 12, y: rect.maxY - 30), size: 15, color: .white, weight: .semibold)
     }
 
-    func drawEyeCard(ctx: CGContext, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) {
-        let rect = CGRect(x: x, y: y, width: w, height: h)
-        drawCardBackground(ctx: ctx, rect: rect)
-        drawLabel("Focus Buddy", at: CGPoint(x: x + 14, y: y + h - 30), size: 15, color: .white, weight: .semibold)
-        drawLabel("Tiny camera view shows focus status", at: CGPoint(x: x + 14, y: y + h - 52), size: 11, color: .lightGray, weight: .regular)
-        let eyeColor = (stage == .decay) ? NSColor.systemRed : NSColor.systemGreen
+    func drawStatusCard(ctx: CGContext, rect: CGRect) {
+        drawCard(ctx: ctx, rect: rect, title: "Garden State")
+        drawLabel(status.state.rawValue.uppercased(), at: CGPoint(x: rect.minX + 14, y: rect.maxY - 64), size: 22, color: stageColor(), weight: .bold)
+        let eyeColor = status.eyesDetected ? NSColor.systemGreen : NSColor.systemRed
         ctx.setFillColor(eyeColor.cgColor)
-        ctx.fillEllipse(in: CGRect(x: x + 14, y: y + 20, width: 14, height: 14))
-        drawLabel("Eyes visibility indicator", at: CGPoint(x: x + 36, y: y + 20), size: 11, color: .white, weight: .regular)
+        ctx.fillEllipse(in: CGRect(x: rect.minX + 16, y: rect.minY + 30, width: 13, height: 13))
+        drawLabel("Eyes \(status.eyesDetected ? "Seen" : "Searching")", at: CGPoint(x: rect.minX + 35, y: rect.minY + 28), size: 12, color: .lightGray, weight: .regular)
+        drawLabel("Chain: \(status.chainBadge)", at: CGPoint(x: rect.minX + 14, y: rect.minY + 10), size: 11, color: .lightGray, weight: .regular)
     }
 
-    func drawStateCard(ctx: CGContext, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) {
-        let rect = CGRect(x: x, y: y, width: w, height: h)
-        drawCardBackground(ctx: ctx, rect: rect)
-        drawLabel("Garden State", at: CGPoint(x: x + 14, y: y + h - 30), size: 15, color: .white, weight: .semibold)
-        drawLabel(stage.rawValue.uppercased(), at: CGPoint(x: x + 14, y: y + h - 62), size: 22, color: stageColor(), weight: .bold)
-        drawLabel(stageText(), at: CGPoint(x: x + 14, y: y + 26), size: 12, color: .lightGray, weight: .regular)
+    func drawStatsCard(ctx: CGContext, rect: CGRect) {
+        drawCard(ctx: ctx, rect: rect, title: "Live Stats")
+        drawLabel(String(format: "Focus %.2f   Time %.1fm", status.lookingScore, status.screenTimeSeconds / 60.0),
+                  at: CGPoint(x: rect.minX + 14, y: rect.maxY - 58),
+                  size: 12,
+                  color: .lightGray,
+                  weight: .regular)
+        drawLabel(String(format: "HP %d%%   Value $%.2f", status.healthScore, status.valueScore * 10.0),
+                  at: CGPoint(x: rect.minX + 14, y: rect.maxY - 82),
+                  size: 12,
+                  color: .lightGray,
+                  weight: .regular)
+        drawLabel("Level \(status.flowerLevel)  Sessions \(status.sessions)", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 106), size: 12, color: .lightGray, weight: .regular)
+        drawLabel("Streak \(status.streakDays)d  Decay \(status.decayPenalties)", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 128), size: 12, color: .lightGray, weight: .regular)
+        let line = status.statusMessage.isEmpty ? status.demoStep : status.statusMessage
+        drawLabel(line, at: CGPoint(x: rect.minX + 14, y: rect.minY + 10), size: 11, color: .white, weight: .regular)
     }
 
-    func drawRecoveryCard(ctx: CGContext, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) {
-        let rect = CGRect(x: x, y: y, width: w, height: h)
-        drawCardBackground(ctx: ctx, rect: rect)
-        drawLabel("Recovery Guide", at: CGPoint(x: x + 14, y: y + h - 30), size: 15, color: .white, weight: .semibold)
+    func drawQRCard(ctx: CGContext, rect: CGRect) {
+        drawCard(ctx: ctx, rect: rect, title: "Photo Check-in QR")
+        if let qr = qrImage {
+            let imageRect = CGRect(x: rect.minX + 30, y: rect.minY + 72, width: rect.width - 60, height: rect.width - 60)
+            qr.draw(in: imageRect)
+            ctx.setStrokeColor(NSColor(calibratedRed: 0.72, green: 0.77, blue: 0.95, alpha: 0.95).cgColor)
+            ctx.stroke(imageRect.insetBy(dx: -2, dy: -2))
+        } else {
+            drawLabel("Waiting for QR...", at: CGPoint(x: rect.minX + 26, y: rect.minY + 120), size: 13, color: .lightGray, weight: .regular)
+        }
+        drawLabel("Press Y -> scan -> upload", at: CGPoint(x: rect.minX + 18, y: rect.minY + 42), size: 12, color: .lightGray, weight: .regular)
+        drawLabel("Then watch NFT popup", at: CGPoint(x: rect.minX + 18, y: rect.minY + 22), size: 12, color: .lightGray, weight: .regular)
+    }
 
-        let phase = (sin(pulse) + 1.0) * 0.5
-        let ringColor = stageColor().withAlphaComponent(0.35 + (0.35 * phase))
-        ctx.setStrokeColor(ringColor.cgColor)
-        ctx.setLineWidth(5)
-        ctx.strokeEllipse(in: CGRect(x: x + w - 78, y: y + h - 84, width: 52, height: 52))
+    func drawChainCard(ctx: CGContext, rect: CGRect) {
+        drawCard(ctx: ctx, rect: rect, title: "NFT + Immutable Chain")
+        drawLabel("Token: \(status.tokenId.isEmpty ? "pending" : status.tokenId)", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 56), size: 11, color: .lightGray, weight: .regular)
+        drawLabel("Tx: \(status.txHash.prefix(18))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 78), size: 11, color: .lightGray, weight: .regular)
+        drawLabel("Block: \(status.localBlockHash.prefix(24))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 100), size: 11, color: .lightGray, weight: .regular)
+        if !status.proofURL.isEmpty {
+            drawLabel("Proof URL ready in /my-flower", at: CGPoint(x: rect.minX + 14, y: rect.minY + 10), size: 11, color: .white, weight: .regular)
+        }
+    }
 
-        drawLabel("1) Focus on screen for tracking", at: CGPoint(x: x + 14, y: y + h - 62), size: 11, color: .lightGray, weight: .regular)
-        drawLabel("2) Press Y when prompted", at: CGPoint(x: x + 14, y: y + h - 82), size: 11, color: .lightGray, weight: .regular)
-        drawLabel("3) Upload an outdoor photo", at: CGPoint(x: x + 14, y: y + h - 102), size: 11, color: .lightGray, weight: .regular)
-        drawLabel("4) See flower level and value rise", at: CGPoint(x: x + 14, y: y + h - 122), size: 11, color: .lightGray, weight: .regular)
+    func drawMintPopup(ctx: CGContext, w: CGFloat, h: CGFloat) {
+        let now = Date().timeIntervalSince1970
+        guard status.mintFlashUntil > now else { return }
+        let phase = CGFloat((status.mintFlashUntil - now) / 6.0)
+        let alpha = max(0.3, min(1.0, phase))
+        let rect = CGRect(x: max(40, (w / 2) - 250), y: max(90, (h / 2) - 90), width: 500, height: 180)
+        let path = CGPath(roundedRect: rect, cornerWidth: 18, cornerHeight: 18, transform: nil)
+        ctx.addPath(path)
+        ctx.setFillColor(NSColor(calibratedRed: 0.12, green: 0.45, blue: 0.24, alpha: alpha).cgColor)
+        ctx.fillPath()
+        ctx.addPath(path)
+        ctx.setStrokeColor(NSColor(calibratedRed: 0.70, green: 0.95, blue: 0.78, alpha: alpha).cgColor)
+        ctx.setLineWidth(3)
+        ctx.strokePath()
+        drawLabel("NFT UPGRADED", at: CGPoint(x: rect.minX + 124, y: rect.maxY - 64), size: 33, color: .white, weight: .bold)
+        drawLabel(String(format: "Value $%.2f  |  Level %d", status.valueScore * 10.0, status.flowerLevel), at: CGPoint(x: rect.minX + 126, y: rect.maxY - 98), size: 16, color: .white, weight: .semibold)
+        drawLabel("Open /my-flower on phone", at: CGPoint(x: rect.minX + 130, y: rect.maxY - 124), size: 14, color: .white, weight: .regular)
+    }
+
+    func stageColor() -> NSColor {
+        switch status.state {
+        case .normal: return NSColor(calibratedRed: 0.42, green: 0.80, blue: 0.52, alpha: 0.95)
+        case .warning: return NSColor(calibratedRed: 0.95, green: 0.74, blue: 0.28, alpha: 0.95)
+        case .decay: return NSColor(calibratedRed: 0.92, green: 0.46, blue: 0.52, alpha: 0.95)
+        case .recovery: return NSColor(calibratedRed: 0.38, green: 0.72, blue: 0.96, alpha: 0.95)
+        }
     }
 
     func drawLabel(_ text: String, at point: CGPoint, size: CGFloat, color: NSColor, weight: NSFont.Weight) {
@@ -205,10 +259,9 @@ class OverlayView: NSView {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: OverlayWindow?
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         window = OverlayWindow()
-        print("[overlay] Widget overlay running")
+        print("[overlay] Widget overlay running with QR/status sync")
     }
 }
 

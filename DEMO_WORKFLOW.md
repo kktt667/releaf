@@ -14,7 +14,7 @@ bash run_all.sh
 
 1. **Focus tracking starts only when face + eyes are seen.**
 2. Keep looking at screen to trigger `WARNING` then `DECAY`.
-3. Press `Y` when prompted.
+3. Press `Y` when prompted (demo mode also auto-starts after ~1s).
 4. Scan QR from phone.
 5. Upload an outdoor photo from the phone page.
 6. Watch `NFT UPGRADED` popup on laptop.

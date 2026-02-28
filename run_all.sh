@@ -20,6 +20,8 @@ fi
 if [[ "${RESET_DEMO_STATE:-1}" == "1" ]]; then
   rm -f "data/recovery_ledger.json" || true
   rm -f "data/simulated_chain.jsonl" || true
+  rm -f "data/overlay_status.json" || true
+  rm -f "data/current_qr.png" || true
   rm -rf "data/proof_artifacts" || true
   mkdir -p "data/proof_artifacts"
   echo "normal" > stage.txt 2>/dev/null || true
@@ -36,7 +38,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [[ "${RUN_OVERLAY:-0}" == "1" ]]; then
+if [[ "${RUN_OVERLAY:-1}" == "1" ]]; then
   if command -v swiftc >/dev/null 2>&1; then
     pkill -f "/plant_overlay" >/dev/null 2>&1 || true
     if [[ ! -f "plant_overlay" || "plant_overlay.swift" -nt "plant_overlay" ]]; then
@@ -48,8 +50,6 @@ if [[ "${RUN_OVERLAY:-0}" == "1" ]]; then
   else
     echo "[run_all] swiftc not found, skipping overlay."
   fi
-else
-  echo "[run_all] Swift overlay disabled (single-window mode)."
 fi
 
 CMD=(.venv/bin/python camera_tracking.py --demo-mode)
