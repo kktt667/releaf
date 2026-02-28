@@ -54,10 +54,12 @@ class OverlayView: NSView {
     var status = OverlayStatus()
     var qrImage: NSImage?
     var lastQrPath: String = ""
+    var flowerImages: [NSImage] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        loadFlowerImages()
         Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -73,7 +75,37 @@ class OverlayView: NSView {
     func tick() {
         pulse += 0.08
         if pulse > 10_000 { pulse = 0 }
+        if flowerImages.isEmpty {
+            loadFlowerImages()
+        }
         needsDisplay = true
+    }
+
+    func loadFlowerImages() {
+        let flowersDir = FileManager.default.currentDirectoryPath + "/flowers"
+        guard let items = try? FileManager.default.contentsOfDirectory(atPath: flowersDir) else { return }
+        let filtered = items
+            .filter { name in
+                let lower = name.lowercased()
+                return lower.hasSuffix(".png") || lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".webp")
+            }
+            .sorted()
+        var loaded: [NSImage] = []
+        for name in filtered {
+            let full = flowersDir + "/" + name
+            if let img = NSImage(contentsOfFile: full) {
+                loaded.append(img)
+            }
+        }
+        if !loaded.isEmpty {
+            flowerImages = loaded
+        }
+    }
+
+    func flowerImageForLevel(_ level: Int) -> NSImage? {
+        guard !flowerImages.isEmpty else { return nil }
+        let idx = min(max(level - 1, 0), flowerImages.count - 1)
+        return flowerImages[idx]
     }
 
     func readStatus() {
@@ -127,7 +159,7 @@ class OverlayView: NSView {
 
         // Right widgets with QR + chain.
         drawQRCard(ctx: ctx, rect: CGRect(x: w - 282, y: h - 302, width: 268, height: 286))
-        drawChainCard(ctx: ctx, rect: CGRect(x: w - 282, y: h - 472, width: 268, height: 156))
+        drawChainCard(ctx: ctx, rect: CGRect(x: w - 282, y: h - 500, width: 268, height: 184))
 
         drawMintPopup(ctx: ctx, w: w, h: h)
     }
@@ -175,7 +207,7 @@ class OverlayView: NSView {
         ctx.setFillColor(eyeColor.cgColor)
         ctx.fillEllipse(in: CGRect(x: rect.minX + 16, y: rect.minY + 30, width: 13, height: 13))
         drawLabel("Eyes \(status.eyesDetected ? "Seen" : "Searching")", at: CGPoint(x: rect.minX + 35, y: rect.minY + 28), size: 12, color: .lightGray, weight: .regular)
-        drawLabel("Chain: \(status.chainBadge)", at: CGPoint(x: rect.minX + 14, y: rect.minY + 10), size: 11, color: .lightGray, weight: .regular)
+        drawBadgePill(ctx: ctx, rect: CGRect(x: rect.minX + 14, y: rect.minY + 8, width: rect.width - 28, height: 18), text: status.chainBadge)
     }
 
     func drawStatsCard(ctx: CGContext, rect: CGRect) {
@@ -212,9 +244,13 @@ class OverlayView: NSView {
 
     func drawChainCard(ctx: CGContext, rect: CGRect) {
         drawCard(ctx: ctx, rect: rect, title: "NFT + Immutable Chain")
-        drawLabel("Token: \(status.tokenId.isEmpty ? "pending" : status.tokenId)", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 56), size: 11, color: .lightGray, weight: .regular)
-        drawLabel("Tx: \(status.txHash.prefix(18))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 78), size: 11, color: .lightGray, weight: .regular)
-        drawLabel("Block: \(status.localBlockHash.prefix(24))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 100), size: 11, color: .lightGray, weight: .regular)
+        if let flower = flowerImageForLevel(status.flowerLevel) {
+            flower.draw(in: CGRect(x: rect.maxX - 78, y: rect.maxY - 78, width: 56, height: 56))
+        }
+        drawBadgePill(ctx: ctx, rect: CGRect(x: rect.minX + 14, y: rect.maxY - 54, width: rect.width - 28, height: 18), text: status.chainBadge)
+        drawLabel("Token: \(status.tokenId.isEmpty ? "pending" : status.tokenId)", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 78), size: 11, color: .lightGray, weight: .regular)
+        drawLabel("Tx: \(status.txHash.prefix(18))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 100), size: 11, color: .lightGray, weight: .regular)
+        drawLabel("Block: \(status.localBlockHash.prefix(24))", at: CGPoint(x: rect.minX + 14, y: rect.maxY - 122), size: 11, color: .lightGray, weight: .regular)
         if !status.proofURL.isEmpty {
             drawLabel("Proof URL ready in /my-flower", at: CGPoint(x: rect.minX + 14, y: rect.minY + 10), size: 11, color: .white, weight: .regular)
         }
@@ -236,7 +272,40 @@ class OverlayView: NSView {
         ctx.strokePath()
         drawLabel("NFT UPGRADED", at: CGPoint(x: rect.minX + 124, y: rect.maxY - 64), size: 33, color: .white, weight: .bold)
         drawLabel(String(format: "Value $%.2f  |  Level %d", status.valueScore * 10.0, status.flowerLevel), at: CGPoint(x: rect.minX + 126, y: rect.maxY - 98), size: 16, color: .white, weight: .semibold)
-        drawLabel("Open /my-flower on phone", at: CGPoint(x: rect.minX + 130, y: rect.maxY - 124), size: 14, color: .white, weight: .regular)
+        drawBadgePill(ctx: ctx, rect: CGRect(x: rect.minX + 126, y: rect.maxY - 126, width: 250, height: 20), text: status.chainBadge)
+        drawLabel("Open /my-flower on phone", at: CGPoint(x: rect.minX + 130, y: rect.maxY - 150), size: 14, color: .white, weight: .regular)
+        if let currentFlower = flowerImageForLevel(status.flowerLevel) {
+            currentFlower.draw(in: CGRect(x: rect.minX + 24, y: rect.minY + 26, width: 86, height: 86))
+        }
+        if let nextFlower = flowerImageForLevel(status.flowerLevel + 1) {
+            nextFlower.draw(in: CGRect(x: rect.minX + 390, y: rect.minY + 26, width: 86, height: 86))
+            drawLabel("→", at: CGPoint(x: rect.minX + 350, y: rect.minY + 56), size: 28, color: .white, weight: .bold)
+        }
+    }
+
+    func drawBadgePill(ctx: CGContext, rect: CGRect, text: String) {
+        let lower = text.lowercased()
+        let fill: NSColor
+        let stroke: NSColor
+        if lower.contains("live") {
+            fill = NSColor(calibratedRed: 0.13, green: 0.33, blue: 0.22, alpha: 0.95)
+            stroke = NSColor(calibratedRed: 0.39, green: 0.82, blue: 0.60, alpha: 0.95)
+        } else if lower.contains("retry") {
+            fill = NSColor(calibratedRed: 0.35, green: 0.19, blue: 0.22, alpha: 0.95)
+            stroke = NSColor(calibratedRed: 0.88, green: 0.48, blue: 0.58, alpha: 0.95)
+        } else {
+            fill = NSColor(calibratedRed: 0.33, green: 0.29, blue: 0.18, alpha: 0.95)
+            stroke = NSColor(calibratedRed: 0.91, green: 0.75, blue: 0.37, alpha: 0.95)
+        }
+        let path = CGPath(roundedRect: rect, cornerWidth: 9, cornerHeight: 9, transform: nil)
+        ctx.addPath(path)
+        ctx.setFillColor(fill.cgColor)
+        ctx.fillPath()
+        ctx.addPath(path)
+        ctx.setStrokeColor(stroke.cgColor)
+        ctx.setLineWidth(1.4)
+        ctx.strokePath()
+        drawLabel(text, at: CGPoint(x: rect.minX + 8, y: rect.minY + 4), size: 11, color: .white, weight: .semibold)
     }
 
     func stageColor() -> NSColor {
