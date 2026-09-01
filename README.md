@@ -1,97 +1,65 @@
-# Touch Grass Recovery Demo
+# Releaf — touch grass, verified by camera
 
-This workspace already contains the full end-to-end hackathon flow in `camera_tracking.py`:
+Your plant wilts while you stare at your screen. To bring it back you have to go outside and photograph real grass.
 
-- State-driven lifecycle (`ONLINE` -> `WARNING` -> `DECAY` -> `RECOVERY_REQUIRED` -> `OUTSIDE_MODE` -> `PROOF_VERIFIED` -> `MINTED`)
-- Session-scoped QR upload routes (`/session/<id>`)
-- Absence-gated outdoor proof verification
-- Local behavior/value ledger at `data/recovery_ledger.json`
-- Optional thirdweb/Base Sepolia mint/update bridge
-- Demo-ready runtime profile via `--demo-mode`
+And it checks. That's the whole project.
 
-## Quick Start (One Command)
+Hackathon build. Python, OpenCV, Flask, a Swift desktop overlay, ~2,600 lines.
 
-```bash
-bash run_demo.sh
+---
+
+## The actual problem
+
+Naive version is trivially cheatable. Hold up a green jumper. Point the webcam at a photo of a lawn. Congratulations, you've touched grass.
+
+So the real problem isn't "detect grass" — it's **catch people cheating, with no training budget, no internet, running live on a laptop webcam.**
+
+**Beating the green jumper.** Start with an HSV green mask, which happily accepts a t-shirt. Two more signals do the work: real foliage is a hundred shades of green where dyed fabric is basically one, and grass is full of fine edges where a jumper is smooth. So — hue variance, plus Canny edge density counted *only inside the green mask*.
+
+```python
+green_mask = (h >= 28) & (h <= 92) & (s >= 45) & (v >= 35)
+hue_variation_score = clip(hue_std / 18.0, 0, 1)   # fabric = low hue spread
+texture_score = clip(edge_density / 0.18, 0, 1)    # plants = fine edges
 ```
 
-The script will:
+A separate outdoor heuristic looks at the whole scene, so your houseplant doesn't count either.
 
-1. Create `.venv` if needed
-2. Install `requirements.txt`
-3. Start `camera_tracking.py --demo-mode`
+**The bit that actually stops cheating** isn't visual. Recovery needs the webcam to confirm you're *not there* — you can't submit proof from outdoors while sitting at your screen. The photo comes off your phone via a QR-scoped session, so the two devices are necessarily in different places.
 
-## Chain Mode (Optional)
+**k-NN with a fallback.** No trained model — k-NN over a handful of labelled images, blended with the heuristic. `ml is None` when there are no samples, so it works on first run with zero setup and improves as you add them:
 
-To enable live mint/update calls:
-
-```bash
-export ENABLE_CHAIN=1
-export WALLET_ADDRESS="0xyourwallet"
-export THIRDWEB_MINT_URL="https://your-thirdweb-mint-endpoint"
-export THIRDWEB_UPDATE_URL="https://your-thirdweb-update-endpoint"
-export THIRDWEB_API_KEY="your_api_key_if_needed"
-bash run_demo.sh
+```python
+if ml is None:      # no samples yet
+    return heur     # fall back to pure heuristic
+return clip(0.45 * heur + 0.55 * ml, 0.0, 1.0)
 ```
 
-If chain calls fail, the app automatically falls back to local-ledger mode and shows `CHAIN_FALLBACK_LOCAL_LEDGER` for demo reliability.
+Right call for a hackathon. Genuinely weaker than a real CNN, but it degrades predictably instead of mysteriously.
 
-### Chain Smoke Test (No Camera Needed)
+## Lifecycle
 
-Use this to validate your thirdweb mint/update endpoint wiring quickly:
-
-```bash
-.venv/bin/python camera_tracking.py \
-  --mint-enabled \
-  --wallet-address "$WALLET_ADDRESS" \
-  --thirdweb-mint-url "$THIRDWEB_MINT_URL" \
-  --thirdweb-update-url "$THIRDWEB_UPDATE_URL" \
-  --thirdweb-api-key "$THIRDWEB_API_KEY" \
-  --chain-smoke-test
+```
+ONLINE → WARNING → DECAY → RECOVERY_REQUIRED → OUTSIDE_MODE → PROOF_VERIFIED → MINTED
 ```
 
-If updating an existing token, include:
+Every transition gated on the signals above, all of it written to an append-only ledger.
+
+## Chain stuff that can't break the demo
+
+Verified recoveries mint as NFTs via thirdweb on Base Sepolia. A live demo can't hang on an RPC call, so chain state is a *badge*, not a blocking step: `CHAIN_LIVE → CHAIN_RETRYING → CHAIN_FALLBACK_LOCAL_LEDGER`. Chain slow or dead? Retry, quietly fall back to the local hash-linked ledger, carry on.
+
+## Running it
 
 ```bash
---chain-smoke-token-id "<token_id>"
+bash run_demo.sh    # venv, deps, demo mode — then scan the QR in the window
 ```
 
-## Overlay (Swift)
+Chain mode is opt-in via env vars (see `.env.example`). Without them everything runs local. `run_all.sh` adds the Swift overlay.
 
-The app now writes a stage file (`stage.txt`) compatible with your overlay states (`normal`, `warning`, `decay`, `recovery`).
+## Known rough edges
 
-Run overlay:
+`camera_tracking.py` is one 2,600-line file — CV pipeline, HTTP server and chain bridge all in one module because splitting them mid-demo wasn't worth the risk. The classes are already there, they just need to become files.
 
-```bash
-bash run_overlay.sh
-```
+The bigger one: **I never adversarially tested the thing whose entire premise is resisting cheating.** No numbers on how often a jumper or a monitor-photo gets through. That's the gap that matters and it's what I'd build next.
 
-## Absolute Emergency Mode (Local Mint + Public Proof)
-
-If you want zero deployment risk for judging, use local mint simulation with optional NFT.Storage proof links:
-
-```bash
-EMERGENCY_MODE=1 RUN_OVERLAY=1 bash run_all.sh
-```
-
-Outputs are written under `data/proof_artifacts/`:
-
-- local proof image (`*_proof.jpg`)
-- metadata JSON (`*_metadata.json`)
-- simulated token + tx hash stored in `data/recovery_ledger.json`
-
-If `NFT_STORAGE_API_KEY` is set, metadata is uploaded and a public IPFS proof URL is generated.
-
-## Camera Permission (macOS)
-
-If startup logs show camera access denied:
-
-```bash
-tccutil reset Camera
-```
-
-Then rerun `bash run_demo.sh` and allow camera access when prompted.
-
-## Demo Runbook
-
-For stage/demo script and NFT minting narrative, see `DEMO_WORKFLOW.md`.
+MIT
